@@ -15,21 +15,10 @@
 ///////////////////////////////////////////////////////
 //DEFINICIONES, VARIABLES Y RUTINAS PARA LA LCD
 
-volatile char lcd_init;
 volatile unsigned char bufprint[40];
 
-#define E	RA0
-#define RS	RA1
-#define RW	RA2
-
-#define tr_bus	TRISB
-#define BUS	PORTB
-#define BF	RB7
-
 #define BL	RC2
-#define BLOUT	true	//DEPURACION: En true el backlight parpadea a 1 Hz (una vez configurado el reloj)
-
-#define conbusyflag	true
+#define BLOUT	true	//DEPURACION LOCAL: En true el backlight parpadea a 1 Hz (una vez configurado el reloj)
 
 #include "lcd.h"
 
@@ -201,11 +190,9 @@ void FJ (){
 }
 
 /**
- * 
+ * Demora de cant*100 ms
  */
-
-
-void demora (unsigned char cant) {
+void ms100 (unsigned char cant) {
 	while (cant--) {
 		__delay_ms(50);
 		__delay_ms(50);
@@ -231,13 +218,13 @@ void main(void) {
 	OSCCON=0x63;//0x50;
 	ADCON1=0x7|0xF;
 	CMCON=0x7;
-	
+
 	TRISC=0xFB; //Pin de backlight
-	
+
 	control=0;
 	CMCON=7;	//Deshabilita los comparadores y deja el puerto A como proposito general
 	tr_control=0xf8;	//Solo los tres pines mas bajos son salidas
-	tr_bus=0;	//Todos los pines son salidas
+
 	limite=3;	//variable para limites de la fecha
 	num=0;		//Variable para variar limites
 	//HH=5;
@@ -247,7 +234,7 @@ void main(void) {
 	cambio=0;
 	i=6;
 	siguiente=0x89; //segunda linea de la LCD
-   
+
 	//INICIALIZACION DEL MODULO CCP
 	CCP1CON=0; // Apaga el modulo CCP
 	TMR1=0;		// Resetear Timmer1
@@ -257,14 +244,13 @@ void main(void) {
 	T1CON=0x30;	// TMR1 con preescaler de 8
 	CCPR1=0xF424; //CMP de 62500Hz
 	CCP1CON=0x0B; // Modo de comparacion con evento especial 
-	
+
 	//INICIALIZACION DE VARIABLES... y perifericos
-	lcd_init=false;
 	iniciaLCD();
 	lcdcon(0x0C);	//Display Control - Enciende display, sin cursor ni parpadeo
-	OK==0;	//Boton OK
-	SIG==0;	//Boton siguiente para modificar fecha y hora
-	CHANGE==0;
+	OK=0;	//Boton OK
+	SIG=0;	//Boton siguiente para modificar fecha y hora
+	CHANGE=0;
 	medseg=0;
 	cuenta=0;
 	//////////////////////////////////////////////////////////
@@ -379,14 +365,14 @@ interrupt void ISR (void){
 		CCP1IF=0;
 		if (medseg) {
 			//x[5]++;
-			cambio=1;
+			cambio = 1;
 			#if BLOUT
-			BL=1;
+			BL = 1;
 			#endif
 		}
 		#if BLOUT
 		else {
-			BL=0;
+			BL = 0;
 		}
 		#endif
 		medseg=!medseg;

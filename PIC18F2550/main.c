@@ -1,7 +1,10 @@
 #include <xc.h>
 #include <string.h>
-#include <stdio.h>
+#include <stdio.h>  //sprintf
 #include <math.h>
+#include <stdbool.h>
+#include "lcd.h"
+
 #define _XTAL_FREQ 4000000
 #pragma config CPUDIV = OSC4_PLL6, PLLDIV = 12, USBDIV = 1	//1L
 #pragma config FCMEN = ON, IESO = OFF, FOSC = INTOSCIO_EC	//1H
@@ -14,18 +17,15 @@
 
 ///////////////////////////////////////////////////////
 //DEFINICIONES, VARIABLES Y RUTINAS PARA LA LCD
-
-volatile unsigned char bufprint[40];
-
-#define BL	RC2
-#define BLOUT	true	//DEPURACION LOCAL: En true el backlight parpadea a 1 Hz (una vez configurado el reloj)
-
-#include "lcd.h"
+#define BL      LATC2
+#define BLOUT   true	//DEPURACION LOCAL: En true el backlight parpadea a 1 Hz (una vez configurado el reloj)
+unsigned char bufprint[40];
 
 /////////////////////////////////////////////////
 // PROGRAMA PRINCIPAL
-volatile unsigned char siguiente; //Variable para mover el cursor de la LCD
 #define paramsX 14
+
+volatile unsigned char siguiente; //Variable para mover el cursor de la LCD
 volatile unsigned char x[paramsX]={1,2,0,0,0,0,0,1,0,1,2,0,1,6}; //fecha incial
 //volatile unsigned char z[14]; //
 volatile unsigned char cuenta;
@@ -34,9 +34,8 @@ volatile unsigned char TU=0;
 
 volatile unsigned long FJu=0;
 
-
 volatile unsigned char horaUTC[3]; //0:H,1:M,2:S
-volatile unsigned char horaSL[3]; //0:H,1:M,2:S
+unsigned char horaSL[3]; //0:H,1:M,2:S
 volatile unsigned char fecha1UTC[2]; //0:M,1:D
 volatile unsigned int fecha2UTC; //Año
 
@@ -75,7 +74,9 @@ double ajustatiempo(double hora) {
 	return hora;
 }
 void tiempo(unsigned char pos, unsigned char hora[]){
+    unsigned char largo;
 	lcdcon(pos);
+    /*
 	lcddat(hora[0]/10+48);
 	lcddat(hora[0]%10+48);
 	escribe((char *)"h",1);
@@ -85,6 +86,10 @@ void tiempo(unsigned char pos, unsigned char hora[]){
 	lcddat(hora[2]/10+48);
 	lcddat(hora[2]%10+48);
 	escribe((char *)"s",1);
+    //*/    //Todo este bloque comentado lo hace la siguiente linea:
+    //Se imprimen minimo 2 caracteres, pero si se excede, muestra tambien el numero excedido
+    largo=sprintf(bufprint,"%02uh%02um%02us",hora[0],hora[1],hora[2]);
+    escribe(bufprint,largo);
 	//FJ(hora);	
 }
 /**
@@ -98,22 +103,21 @@ void FJ (){
 	int y,m;
 	y=fecha2UTC;
 	m=fecha1UTC[0];
-	
+
 	if (m<=2) {
 		m+=12;
 		y-=1;
 	}
-	
+
 	FJu = 365*(unsigned long)(y+4716)+(unsigned long)((y+4716)/4);
 	FJu += (unsigned long)(30.6001*(m+1)); //+
 	FJu -= (unsigned long)(y/100); //-
 	FJu += ((unsigned long)(y/100))/4; //-
 	FJu += fecha1UTC[1]-1522; //+
-	
-	
+
 	//largo=sprintf(bufprint,"FJ: %1u", FJu);
 	//escribe(bufprint,largo);
-	
+
 	//2. Fraccion de Siglo Juliano
 	double T=((double)(FJu-2451545))/36525.0;
 	/*lcdcon(0x94);
@@ -156,14 +160,14 @@ void FJ (){
 	var2 = (unsigned long) TSGO;
 	lcdcon(0xC0);
 	//*/
-	
+
 	//LINEA 89 JP
 	double TSGOfloor=ajustatiempo(TSGO);
 	//lcdcon(0x94);
 	//largo=sprintf(bufprint,"TSG0:%g", TSGOfloor);
 	//escribe(bufprint,largo);
 	double horaUTCfloor = ((double) horaUTC[2]/3600.0);
-	horaUTCfloor += ((double)horaUTC[0]+0.0)+ ((double)horaUTC[1]/60.0);
+	horaUTCfloor += ((double)horaUTC[0]+ (double)horaUTC[1]/60.0);
 	//lcdcon(0x94);
 	//largo=sprintf(bufprint,"TSG0:%g", horaUTCfloor);
 	//escribe(bufprint,largo);
@@ -183,10 +187,8 @@ void FJ (){
 	double TSideralL=ajustatiempo(TSGt+(lon/15.0));
 	horaSL[0]=(int)TSideralL;
 	horaSL[1]=(int)((TSideralL-horaSL[0])*60);
-	horaSL[2]=(((TSideralL-horaSL[0])*60)-horaSL[1])*60;
+	horaSL[2]=((((int)TSideralL-horaSL[0])*60)-horaSL[1])*60;
 	tiempo(0x9A,horaSL);
-	
-
 }
 
 /**
@@ -199,31 +201,113 @@ void ms100 (unsigned char cant) {
 	}
 }
 
-#define SIG	RA3
-#define	OK	RA4
+unsigned char leeBCD (unsigned char buffer[],unsigned char digito) {
+    unsigned char fila=buffer[digito/2];
+    return ((digito%2)? (fila>>4) : fila)&0xF ;
+}
+
+void escribeBCD (unsigned char buffer[],unsigned char digito,unsigned char valor){
+    if (valor>0xF) return;
+    unsigned char fila = buffer[digito/2];
+    buffer[digito/2]= digito%2 ? valor<<4 | fila&0xF : fila&0xF0 | valor ;
+}
+
+#define SIG     RA3
+#define OK      RA4
 #define CHANGE  RA6
-#define	control	PORTA
-#define tr_control	TRISA
+
+/**
+ * Interfaz de lectura de datos, y visualizacion en la LCD
+ */
+unsigned short dato (unsigned short minimo,unsigned short inicial,unsigned short maximo) {
+    if (minimo>maximo || inicial<minimo || inicial>maximo) return 0;
+
+    unsigned short resultado=maximo;    //Esta variable se va a reciclar
+    unsigned char digitos=0,bcd_min[2],bcd_res[2],bcd_max[2],digito=0,aux,amax,amin;
+
+    //CALCULO DE LOS DIGITOS REQUERIDOS E IMPRESION DEL VALOR INICIAL
+    for (;resultado;resultado/=10,digitos++)
+        lcdcon(CDSHIFT|CDRIGHT); //Calcula digitos, mueve para imprimir al reves, y al final del bucle, resultado=0;
+    lcdcon(MODESET|DECR);//Ahora al escribir decrementa
+    for (;digito<digitos;digito++) {    //Inicializacion de comparadores por digito
+        escribeBCD(bcd_min,digito,minimo%10);   minimo  /= 10;
+        aux=inicial%10;
+        escribeBCD(bcd_res,digito,aux);  inicial /= 10; lcddat(aux+'0');//y se imprime el valor inicial, de paso
+        escribeBCD(bcd_max,digito,maximo%10);   maximo  /= 10;
+    }
+    lcdcon(MODESET|INCR);//Al escribir incrementa.
+    lcdcon(CDSHIFT|CDRIGHT);//Incrementa 1 para dejar en la posicion del primer digito (de mas peso)
+    //INGRESO DEL USUARIO DIGITO POR DIGITO
+    for (digito=digitos;digito;digito--) {
+        resultado *= 10;
+        amax=leeBCD(bcd_max,digito-1); //Carga valor maximo para el digito
+        amin=leeBCD(bcd_min,digito-1); //Carga valor minimo para el digito
+
+        //Impresion del valor actual del digito en modificacion
+        if (amax==amin) {
+            aux=amax;
+        } else {
+            aux=leeBCD(bcd_res,digito-1); //Carga valor inicial para el digito
+            if (aux > amax)
+                aux = amax;
+            else if (aux < amin)
+                aux = amin;
+        }
+        //Se queda adentro mientras el usuario no termine con OK
+        while(true){
+            lcddat(aux+'0');//1. Imprimir valor del digito actual, aux, en pantalla (adelanta 1 pos en LCD)
+            lcdcon(CDSHIFT|CDLEFT);//2. Devolverse una posicion en LCD
+            lcdcon(DISPCTL|DON|CON|BON);//3. Dejar cursor con parpadeo
+            while (!(SIG||OK))
+                ; //4. Esperar mientras no se presione pulsador
+            lcdcon(DISPCTL|DON);//Apagar parpadeo.
+            if (SIG) {//4.1 - SIG:
+                while(SIG)
+                    ;//Esperar que se destrabe
+                aux++;  //Incrementar,
+                if (aux>amax)   //decidir con respecto al incremento
+                    aux=amin;   //para actualizar aux
+            } else if (OK) {//4.2 - OK: Guardar valor de aux, romper este while
+                while(OK)
+                    ;//Esperar que se destrabe
+
+                if ((digito > 1) && (amin != amax)) //Si son distintos, se puede hacer "cortocircuito"
+                    if (aux < amax) {
+                        escribeBCD(bcd_max,digito-2,9);
+                    }
+                    if (aux > amin) {
+                        escribeBCD(bcd_min,digito-2,0);
+                    }
+                //escribeBCD(bcd_res,digito-1,aux);
+                break;
+            }
+        }
+        //Una vez no queden mas digitos, restablecer la LCD y colocar el cursor justo despues del ultimo digito
+        lcdcon(CDSHIFT|CDRIGHT);
+        resultado+=aux;
+    }
+
+    return resultado;
+}
 
 unsigned char limite; 	//Variable para limitar el valor de la fecha en cada digito
 unsigned char num;	//Variable para contar el OK
 
 double c;
 int terminar;
-volatile bit medseg;
 unsigned char i;
 
 void main(void) {
-	//INICIALIZACION DE PUERTOS
-	OSCCON=0x63;//0x50;
-	ADCON1=0x7|0xF;
-	CMCON=0x7;
+    OSCCON=0x63;    //INTOSC @ 4 MHz;
 
+    //INICIALIZACION DE PUERTOS
+	ADCON1=0x7|0xF; //Pines Digitales, ver datasheet.
+	CMCON=0x7;      //Deshabilita los comparadores y deja el puerto A como proposito general
+
+    LATA=0;
+    LATB=0;
+    //PUERTOS A y B se inicializan dentro de iniciaLCD()
 	TRISC=0xFB; //Pin de backlight
-
-	control=0;
-	CMCON=7;	//Deshabilita los comparadores y deja el puerto A como proposito general
-	tr_control=0xf8;	//Solo los tres pines mas bajos son salidas
 
 	limite=3;	//variable para limites de la fecha
 	num=0;		//Variable para variar limites
@@ -247,36 +331,51 @@ void main(void) {
 
 	//INICIALIZACION DE VARIABLES... y perifericos
 	iniciaLCD();
-	lcdcon(0x0C);	//Display Control - Enciende display, sin cursor ni parpadeo
-	OK=0;	//Boton OK
-	SIG=0;	//Boton siguiente para modificar fecha y hora
-	CHANGE=0;
-	medseg=0;
+	lcdcon(DISPCTL|DON);	//Display Control - Enciende display, sin cursor ni parpadeo
 	cuenta=0;
 	//////////////////////////////////////////////////////////
-	escribe((char *)"Fecha:   01-01-2016",-1);
-	lcdcon(0xC0); //segunda linea 
-	escribe((char *)"Hora:    12:00:00",-1);
-	lcdcon(0xD4); //tercera linea
-	escribe ((char *)"TU: ",-1);
-	lcdcon(0x94); //cuarta linea
-	escribe((char*)"TSL: ",-1);
+    // CODIGO NUEVO A PROBAR: INTERFACES DE ENTRADA Y SALIDA
+    //* //NOTA: Quitar un / al comienzo para dejar el codigo original.
+    cursor(0,0);//lcdcon(0x80); //primer linea
+    escribe((char *)"HO",0);
+    cursor(1,0);//lcdcon(0xC0); //segunda linea
+    //lcdcon(CDSHIFT|CDRIGHT);
+    //lcdcon(CDSHIFT|CDRIGHT);
+    escribe((char *)"LA",0);
+    cursor(2,0);//lcdcon(0x94); //tercera linea
+    escribe((char *)"KE",0);
+    cursor(3,0);//lcdcon(0xD4); //cuarta linea
+    escribe((char *)"ASE?",0);
+    unsigned short pruebita=(unsigned short)dato(2000,2016,2100);
+    unsigned char buffer[10],largo;
+    largo=sprintf(buffer,"%u",pruebita);
+    escribe(buffer,largo);
+    SLEEP();
+    ////////////////////////////////////////////////////////////*/
+    cursor(0,0);//primer linea
+	escribe((char *)"Fecha:   01-01-2016",0);
+	cursor(1,0); //segunda linea
+	escribe((char *)"Hora:    12:00:00",0);
+	cursor(2,0); //tercera linea
+	escribe ((char *)"TU: ",0);
+	cursor(3,0); //cuarta linea
+	escribe((char *)"TSL: ",0);
 	while (1){ //bucle infinito :D
-		if (terminar==0){ //Reviza si no se ha dado el último Ok 
-			if (SIG==1){
-				while (SIG==1)
+		if (terminar==0){ //Revisa si no se ha dado el último Ok
+			if (SIG){
+				while (SIG)
 					; //espera que se destrabe el boton SIG para cambiar el numero de la fecha
 
 				lcdcon(siguiente);//Segunda linea
 				if (x[i]==limite){ //Escribir en la LCD el numero de la fecha, si se llega el limite vuelve a cero
-					x[i]=0; 		
+					x[i]=0;
 					lcddat(x[i]+48);
 				} else {  //Si no, suma y muestra en pantalla
 					x[i]++;
 					lcddat(x[i]+48);
 				}
-			} else if (OK==1){
-				while (OK==1)
+			} else if (OK){
+				while (OK)
 					;// Espera a que Ok se destrabe
 				switch (num) {
 					case 0:	//si fue el primer OK, entonces cambia el limite 9
@@ -320,14 +419,14 @@ void main(void) {
 					case 11:
 						i++;
 						limite=5;  
-						siguiente=siguiente+2;
+						siguiente+=2;
 						num=num+1;
 						break;
 					case 13:
 						terminar=1; // terminar de editar datos de entrada
 						unsigned char main_hora = x[0]*10 + x[1]+5; //Ajusta a UTC
 						if(main_hora>=24) //Si se excede:
-							main_hora= main_hora % 24 ; //Calcular el residuo a 24
+							main_hora %= 24 ; //Dejar el residuo a 24
 						x[0] = main_hora / 10; //Separa la decena
 						x[1] = main_hora % 10; //Separa la unidad
 						horaUTC[0]=main_hora;
@@ -341,11 +440,11 @@ void main(void) {
 						CCP1IE=1;	//Interrupcion del modulo de captura y comparacion
 						PEIE=1;		//Interrupcion por perifericos
 						GIE=1;      //Interrupciones globales
-						break;					
-					}
-				}
-			}
-		if(cambio==1){
+						break;
+                }
+            }
+        }
+		if(cambio){
 			//reloj(x[5],0);	//le falta un argumento, modificaste reloj, cierto?
 			reloj();	//Incrementa segundo y actualiza horaUTC
 			/*
@@ -357,10 +456,15 @@ void main(void) {
 			cambio=0;
 		}
 	} 
-	while (1)
-		; //por si las pulgas :v
+	while (1) ; //por si las pulgas :'v
 }
+
+/**
+ * Servicio de Procesamiento de Interrupciones
+ */
 interrupt void ISR (void){
+    static bool medseg = false;
+
 	if (CCP1IF && CCP1IE) {
 		CCP1IF=0;
 		if (medseg) {
